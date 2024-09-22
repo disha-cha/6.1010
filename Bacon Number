@@ -1,0 +1,198 @@
+"""
+6.1010 Spring '23 Lab 3: Bacon Number
+"""
+
+#!/usr/bin/env python3
+
+
+# NO ADDITIONAL IMPORTS ALLOWED!
+
+
+def transform_data(raw_data):
+    """
+    Transforms raw data into a dictionary where the keys are actors and the values
+    are a dictionary where the keys are movies and the values are sets of co-actors
+    in that movie.
+
+    Args:
+        raw_data (list): A list of tuples where each tuple contains the names of two
+        actors and the name of a movie.
+
+    Returns:
+        dict: A dictionary where the keys are actors and the values are a dictionary
+        where the keys are movies and the values are sets of co-actors in that movie.
+    """
+    transformed_data = {}
+    for actor1, actor2, movie in raw_data:
+        transformed_data.setdefault(actor1, {})
+        transformed_data.setdefault(actor2, {})
+        transformed_data[actor1].setdefault(movie, set())
+        transformed_data[actor2].setdefault(movie, set())
+        transformed_data[actor1][movie].add(actor2)
+        transformed_data[actor2][movie].add(actor1)
+    return transformed_data
+
+
+def acted_together(transformed_data, actor_id_1, actor_id_2):
+    """
+    Checks if two actors have acted together in a movie.
+
+    Args:
+        transformed_data (dict): A dictionary where the keys are actors and the
+        values are a dictionary where the keys are movies and the values are sets of
+        co-actors in that movie.
+        actor_id_1 (int): The ID of the first actor.
+        actor_id_2 (int): The ID of the second actor.
+
+    Returns:
+        bool: True if the actors have acted together in a movie, False otherwise.
+    """
+    if actor_id_1 == actor_id_2:
+        return True
+    return any(
+        actor_id_2 in transformed_data[actor_id_1][movie]
+        for movie in transformed_data[actor_id_1]
+    )
+
+
+def actors_with_bacon_number(transformed_data, n):
+    """
+    Finds all actors with a Bacon number of n.
+
+    Args:
+        transformed_data (dict): A dictionary where the keys are actors and the values
+        are a dictionary where the keys are movies and the values are sets of co-actors
+        in that movie.
+        n (int): The Bacon number to search for.
+
+    Returns:
+        set: A set of actor IDs with the given Bacon number.
+    """
+    if n < 1 or n > len(transformed_data) // 2 - 1:
+        return set()
+
+    bacon_number_actors = set()
+
+    for actor in transformed_data.keys():
+        path = actor_path(transformed_data, actor, lambda x: x == 4724)
+        if path and len(path) == n + 1:
+            bacon_number_actors.add(actor)
+
+    return bacon_number_actors
+
+
+def bacon_path(transformed_data, actor_id):
+    """
+    Finds the shortest path between an actor and Kevin Bacon, if it exists.
+
+    Args:
+        transformed_data (dict): A dictionary where the keys are actors and the
+        values are a dictionary where the keys are movies and the values are sets
+        of co-actors in that movie.
+        actor_id (int): The ID of the actor to search for a path to Kevin Bacon.
+
+    Returns:
+        list: A list
+    """
+    return actor_to_actor_path(transformed_data, 4724, actor_id)
+
+
+def actor_to_actor_path(transformed_data, actor_id_1, actor_id_2):
+    """
+    Given a dictionary of transformed data, find the shortest path between two actors
+    using breadth-first search. Returns the list of actor IDs representing the path
+    from actor_id_1 to actor_id_2, including both endpoints. Returns None if no path
+    is found.
+
+    Args:
+    - transformed_data: dictionary containing transformed data
+    - actor_id_1: ID of starting actor
+    - actor_id_2: ID of ending actor
+
+    Returns:
+    - list of actor IDs representing the shortest path from actor_id_1 to actor_id_2,
+    including both endpoints, or None if no path is found.
+    """
+
+    def goal_test(actor_id):
+        return actor_id == actor_id_2
+
+    return actor_path(transformed_data, actor_id_1, goal_test)
+
+
+def actor_path(transformed_data, start_actor, goal_test):
+    """
+    Given a dictionary of transformed data, find the shortest path between a starting
+    actor and another actor that satisfies the provided goal_test function. Returns the
+    list of actor IDs representing the shortest path from start_actor to the goal actor,
+    including both endpoints. Returns None if no path is found.
+
+    Args:
+    - transformed_data: dictionary containing transformed data
+    - start_actor: ID of starting actor
+    - goal_test: function that takes an actor ID and returns True if
+    that actor satisfies the goal condition, and False otherwise
+
+    Returns:
+    - list of actor IDs representing the shortest path from start_actor
+     to the goal actor, including both endpoints, or None if no path is found.
+    """
+    if goal_test(start_actor):
+        return [start_actor]
+
+    visited = set()
+    visited.add(start_actor)
+
+    paths = [[start_actor]]
+
+    while paths:
+        current_path = paths.pop(0)
+        current_actor = current_path[-1]
+
+        for movie in transformed_data[current_actor]:
+            for co_actor in transformed_data[current_actor][movie]:
+                if co_actor not in visited:
+                    visited.add(co_actor)
+                    new_path = current_path + [co_actor]
+                    if goal_test(co_actor):
+                        if new_path[0] == start_actor:
+                            return new_path
+                        return new_path
+                    paths.append(new_path)
+
+    return None
+
+
+def actors_connecting_films(transformed_data, movie_id_1, movie_id_2):
+    """
+    Returns the shortest path of actors that connect two movies.
+
+    Args:
+        transformed_data (dict): A dictionary that contains information about
+        actors and the movies they acted in.
+        movie_id_1 (str): The id of the first movie.
+        movie_id_2 (str): The id of the second movie.
+
+    Returns:
+        list: A list of actor names that connect the two movies,
+        or None if no path is found.
+
+    """
+
+    def goal_test(actor):
+        return movie_id_2 in transformed_data[actor]
+
+    for actor_id in transformed_data:
+        if movie_id_1 in transformed_data[actor_id]:
+            path = actor_path(transformed_data, actor_id, goal_test)
+            if path:
+                return list(path)
+
+    return None
+
+
+if __name__ == "__main__":
+    # additional code here will be run only when lab.py is invoked directly
+    # (not when imported from test.py), so this is a good place to put code
+    # used, for example, to generate the results for the online questions.
+    pass
