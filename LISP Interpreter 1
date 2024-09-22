@@ -1,0 +1,352 @@
+"""
+6.1010 Spring '23 Lab 11: LISP Interpreter Part 1
+"""
+#!/usr/bin/env python3
+
+import sys
+import doctest
+
+sys.setrecursionlimit(20_000)
+
+# NO ADDITIONAL IMPORTS!
+
+#############################
+# Scheme-related Exceptions #
+#############################
+
+
+class SchemeError(Exception):
+    """
+    A type of exception to be raised if there is an error with a Scheme
+    program.  Should never be raised directly; rather, subclasses should be
+    raised.
+    """
+
+    pass
+
+
+class SchemeSyntaxError(SchemeError):
+    """
+    Exception to be raised when trying to evaluate a malformed expression.
+    """
+
+    pass
+
+
+class SchemeNameError(SchemeError):
+    """
+    Exception to be raised when looking up a name that has not been defined.
+    """
+
+    pass
+
+
+class SchemeEvaluationError(SchemeError):
+    """
+    Exception to be raised if there is an error during evaluation other than a
+    SchemeNameError.
+    """
+
+    pass
+
+
+############################
+# Tokenization and Parsing #
+############################
+
+
+def number_or_symbol(value):
+    """
+    Helper function: given a string, convert it to an integer or a float if
+    possible; otherwise, return the string itself
+
+    >>> number_or_symbol('8')
+    8
+    >>> number_or_symbol('-5.32')
+    -5.32
+    >>> number_or_symbol('1.2.3.4')
+    '1.2.3.4'
+    >>> number_or_symbol('x')
+    'x'
+    """
+    try:
+        return int(value)
+    except ValueError:
+        try:
+            return float(value)
+        except ValueError:
+            return value
+
+
+def tokenize(source):
+    """
+    Splits an input string into meaningful tokens (left parens, right parens,
+    other whitespace-separated values).  Returns a list of strings.
+
+    Arguments:
+        source (str): a string containing the source code of a Scheme
+                      expression
+    """
+    result = []
+
+    rows = source.split("\n")
+
+    for row in rows:
+        fragment = ""
+        for i, char in enumerate(row):
+            if char in ["(", ")", ";", " "]:
+                if len(fragment) != 0:
+                    result.append(fragment)
+                    fragment = ""
+                if char == "(":
+                    result.append("(")
+                if char == ")":
+                    result.append(")")
+                if char == ";":
+                    break
+            else:
+                fragment += char
+                if i == len(row) - 1:
+                    result.append(fragment)
+
+    return result
+
+
+def parse(tokens):
+    """
+    Parses a list of tokens, constructing a representation where:
+        * symbols are represented as Python strings
+        * numbers are represented as Python ints or floats
+        * S-expressions are represented as Python lists
+
+    Arguments:
+        tokens (list): a list of strings representing tokens
+    """
+
+    if tokens[0] == ")" or tokens.count("(") != tokens.count(")") or \
+            (len(tokens) > 1 and ("(" not in tokens or tokens[-1] != ")")):
+        raise SchemeSyntaxError
+
+    def parse_expression(index):
+        token = tokens[index]
+        if token == "(":
+            sub_list = []
+
+            open_paren = 1
+            sub_index = index
+
+            if tokens[index + 1] == ")":
+                return [], index + 2
+
+            while index < len(tokens) - 1:
+                if tokens[index + 1] == ")":
+                    open_paren -= 1
+                elif tokens[index + 1] == "(":
+                    open_paren += 1
+                if open_paren == 0:
+                    break
+
+                subcomponent, sub_index = parse_expression(index + 1)
+                if sub_index == index + 1:
+                    sub_index += 1
+                    break
+                if subcomponent != ")":
+                    sub_list.append(subcomponent)
+                elif subcomponent == ")" and tokens[index] == "(":
+                    sub_list.append([])
+                index = sub_index - 1
+            return sub_list, sub_index
+
+        else:
+            return number_or_symbol(token), index + 1
+
+    parsed_expression = parse_expression(0)[0]
+
+    return parsed_expression
+
+
+scheme_builtins = {
+    "+": sum,
+    "-": lambda args: -args[0] if len(args) == 1 else (args[0] - sum(args[1:])),
+    "*": lambda args: args[0]
+    if len(args) == 1
+    else (args[0] * scheme_builtins["*"](args[1:])),
+    "/": lambda args: args[0]
+    if len(args) == 1
+    else (args[0] / scheme_builtins["*"](args[1:])),
+    "not": lambda args: "#t" if (args == "#f") else "#f",
+}
+
+
+def evaluate(tree, environment=None):
+    """
+    Evaluate the given syntax tree according to the rules of the Scheme
+    language.
+
+    Arguments:
+        tree (type varies): a fully parsed expression, as the output from the
+                            parse function
+    """
+    default = Frames()
+    default.variables = scheme_builtins
+
+    if environment is None:
+        environment = Frames(default)
+
+    if not isinstance(tree, list):
+        return evaluate_atom(tree, environment)
+
+    if len(tree) == 2 and tree[0] == tree[1] or tree is None:
+        raise SchemeEvaluationError()
+
+    if tree[0] == "define":
+        return evaluate_define(tree, environment)
+
+    if tree[0] == "lambda":
+        return evaluate_lambda(tree, environment)
+
+    if isinstance(tree[0], list):
+        return evaluate_list(tree, environment)
+
+    if isinstance(environment.find(tree[0]), UserFunctions):
+        return evaluate_user_function(tree, environment)
+
+    if environment.find(tree[0]) in scheme_builtins.values():
+        return evaluate_builtin_function(tree, environment)
+
+    raise SchemeEvaluationError()
+
+
+def evaluate_atom(atom, environment):
+    value = environment.find(atom)
+    if value is None:
+        if isinstance(atom, str):
+            if atom in {"#t", "#f", "nil"}:
+                return atom
+            raise SchemeNameError()
+        return atom
+    return value
+
+
+def evaluate_define(tree, environment):
+    if not isinstance(tree[1], list):
+        environment.variables[tree[1]] = evaluate(tree[2], environment)
+        return environment.variables[tree[1]]
+    new_tree = ["define", tree[1][0], ["lambda", tree[1][1:], tree[2]]]
+    return evaluate(new_tree, environment)
+
+
+def evaluate_lambda(tree, environment):
+    args = tree[1]
+    body = tree[2]
+    new_env = Frames(environment)
+    if args is not None:
+        if isinstance(args, list):
+            new_env.variables["args"] = args
+        else:
+            new_env.variables[args] = None
+    return UserFunctions(args, body, new_env)
+
+
+def evaluate_list(tree, environment):
+    func = evaluate(tree[0], environment)
+    var = [evaluate(arg, environment) for arg in tree[1:]]
+    return evaluate(help_evaluation(func, var), func.frame)
+
+
+def evaluate_user_function(tree, environment):
+    function = environment.find(tree[0])
+    arguments = [evaluate(arg, environment) for arg in tree[1:]]
+    env_function = Frames(environment)
+    result = evaluate(help_evaluation(function, arguments), env_function)
+    if isinstance(result, UserFunctions) and not result.variables:
+        result = evaluate(help_evaluation(result, []), env_function)
+    return result
+
+
+def evaluate_builtin_function(tree, environment):
+    op = environment.find(tree[0])
+    return op([evaluate(arg, environment) for arg in tree[1:]])
+
+
+def repl(verbose=False):
+    """
+    Read in a single line of user input, evaluate the expression, and print
+    out the result. Repeat until user inputs "QUIT"
+
+    Arguments:
+        verbose: optional argument, if True will display tokens and parsed
+            expression in addition to more detailed error output.
+    """
+    import traceback
+
+    while True:
+        input_str = input("in> ")
+        if input_str == "QUIT":
+            return
+        try:
+            token_list = tokenize(input_str)
+            if verbose:
+                print("tokens>", token_list)
+            expression = parse(token_list)
+            if verbose:
+                print("expression>", expression)
+            output = evaluate(expression)
+            print("  out>", output)
+        except SchemeError as e:
+            if verbose:
+                traceback.print_tb(e.__traceback__)
+            print("Error>", repr(e))
+
+
+class Frames:
+    """
+    A class representing a frame in a Scheme interpreter.
+
+A frame is a data structure that stores the bindings between variables and their
+values in a specific context of a Scheme program. This class provides methods
+to manage the variables in the frame, as well as to look up variables in
+the parent frames.
+
+Attributes:
+    variables (dict): A dictionary that maps variable names to their values.
+    parent (Frames or None): The parent frame of the current frame, or None
+    if this is the top-level frame.
+
+Methods:
+    find(variable)
+        Looks up the value of a variable in the current frame and all its ancestors.
+        Args:
+            variable (str): The name of the variable to look up.
+        Returns:
+            The value of the variable, or None if the variable is not defined in any
+            of the frames.
+    """
+    def __init__(self, parent=None):
+        self.variables = {}
+        self.parent = parent
+
+    def find(self, variable):
+        if variable in self.variables:
+            return self.variables[variable]
+        elif self.parent is not None:
+            return self.parent.find(variable)
+        return None
+
+
+class UserFunctions:
+    """
+        Represents a user-defined function in Scheme.
+
+        Attributes:
+        - variables (list of str): the names of the parameters of the function
+        - expression (list): the body of the function as a Scheme expression
+        - frame (Frames): the frame in which the function was defined
+    """
+
+    def __init__(self, variables, expression, frame):
+
+    # doctest.testmod()
+    test_graph = {13: [77, 43, 0], 77: [-32, 28], 43: [], 0: [108], -32: [215], 28: [42],
+                  108: [], 215: [-32, 42], 42: [215]}
+    print(find_path(test_graph, 13, -32))
