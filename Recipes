@@ -1,0 +1,251 @@
+"""
+6.1010 Spring '23 Lab 4: Recipes
+"""
+
+import pickle
+import sys
+
+sys.setrecursionlimit(20_000)
+# NO ADDITIONAL IMPORTS!
+
+
+def make_recipe_book(recipes):
+    """
+    Given recipes, a list containing compound and atomic food items, make and
+    return a dictionary that maps each compound food item name to a list
+    of all the ingredient lists associated with that name.
+    """
+    recipe_book = {}
+    for recipe in recipes:
+        if recipe[0] == "compound":
+            name = recipe[1]
+            ingredients = recipe[2]
+            if name not in recipe_book:
+                recipe_book[name] = []
+            recipe_book[name].append(ingredients)
+    return recipe_book
+
+
+def make_atomic_costs(recipes):
+    """
+    Given a recipes list, make and return a dictionary mapping each atomic food item
+    name to its cost.
+    """
+    atomic_costs = {}
+    for recipe in recipes:
+        if recipe[0] == "atomic":
+            name = recipe[1]
+            cost = recipe[2]
+            atomic_costs[name] = cost
+    return atomic_costs
+
+
+def lowest_cost(recipes, food_item, ignore_items=None):
+    """
+    Given a recipes list and the name of a food item, return the lowest cost of
+    a full recipe for the given food item.
+    """
+    recipe_book = make_recipe_book(recipes)
+    atomic_costs = make_atomic_costs(recipes)
+
+    if ignore_items is not None:
+        for item in ignore_items:
+            if item in atomic_costs:
+                del atomic_costs[item]
+            if item in recipe_book:
+                del recipe_book[item]
+
+    if food_item in atomic_costs.keys():
+        return atomic_costs[food_item]
+
+    def find_min_cost_helper(food_item, recipe_book, atomic_costs):
+        if food_item in atomic_costs:
+            return atomic_costs[food_item]
+
+        min_cost = float("inf")
+        for recipe in recipe_book.get(food_item, []):
+            cost = 0
+            valid = True
+            for ingredient, amount in recipe:
+                if ingredient in atomic_costs:
+                    cost += atomic_costs[ingredient] * amount
+                else:
+                    subrecipe_cost = find_min_cost_helper(
+                        ingredient, recipe_book, atomic_costs
+                    )
+                    if subrecipe_cost is None:
+                        valid = False
+                        break
+                    cost += subrecipe_cost * amount
+            if valid and cost < min_cost:
+                min_cost = cost
+
+        return min_cost if min_cost != float("inf") else None
+
+    return find_min_cost_helper(food_item, recipe_book, atomic_costs)
+
+
+def scale_recipe(flat_recipe, n):
+    """
+    Given a dictionary of ingredients mapped to quantities needed, returns a
+    new dictionary with the quantities scaled by n.
+    """
+    return {ingredient: quantity * n for ingredient, quantity in flat_recipe.items()}
+
+
+def make_grocery_list(flat_recipes):
+    """
+    Given a list of flat_recipe dictionaries that map food items to quantities,
+    return a new overall 'grocery list' dictionary that maps each ingredient name
+    to the sum of its quantities across the given flat recipes.
+
+    For example,
+        make_grocery_list([{'milk':1, 'chocolate':1}, {'sugar':1, 'milk':2}])
+    should return:
+        {'milk':3, 'chocolate': 1, 'sugar': 1}
+    """
+    grocery_list = {}
+    for flat_recipe in flat_recipes:
+        for item, quantity in flat_recipe.items():
+            if item not in grocery_list:
+                grocery_list[item] = 0
+            grocery_list[item] += quantity
+    return grocery_list
+
+
+def get_price(recipes, flat_recipe):
+    """
+    Given a list of recipes and a flat recipe, compute the total cost of the flat recipe.
+    """
+    atomic_costs = make_atomic_costs(recipes)
+    total_price = 0
+
+    for ingredient, amount in flat_recipe.items():
+        if ingredient in atomic_costs:
+            total_price += atomic_costs[ingredient] * amount
+        else:
+            sub_recipe_price = get_price(recipes, ingredient)
+            if sub_recipe_price is None:
+                return None
+            total_price += sub_recipe_price * amount
+
+    return total_price
+
+
+def cheapest_flat_recipe(recipes, food_item, ignore_items=None):
+    """
+    Given a recipes list and the name of a food item, return a dictionary
+    (mapping atomic food items to quantities) representing the cheapest full
+    recipe for the given food item.
+
+    Returns None if there is no possible recipe.
+    """
+    all_flats = all_flat_recipes(recipes, food_item, ignore_items)
+    prices = [get_price(recipes, flat) for flat in all_flats]
+    if prices:
+        return all_flats[prices.index(min(prices))]
+    return None
+
+
+def ingredient_mixes(flat_recipes):
+    """
+    Given a list of lists of dictionaries, where each inner list represents all
+    the flat recipes make a certain ingredient as part of a recipe, compute all
+    combinations of the flat recipes.
+    """
+
+    if len(flat_recipes) == 1:
+        return flat_recipes[0]
+
+    else:
+        full = []
+        one = flat_recipes[0]
+        rest = flat_recipes[1:]
+        mixed = ingredient_mixes(rest)
+        for recipe in one:
+            full.extend([make_grocery_list([recipe, mix]) for mix in mixed])
+        return full
+
+
+def has_valid(recipes, food, avoid_foods):
+    """
+    Does a food have a valid recipe?
+    """
+    atomic_costs = make_atomic_costs(recipes)
+    recipe_book = make_recipe_book(recipes)
+    if avoid_foods is None:
+        return food in atomic_costs or food in recipe_book
+    return (food in atomic_costs or food in recipe_book) and food not in avoid_foods
+
+
+def all_flat_recipes(recipes, food_item, avoid_foods=None):
+    """
+    Given a list of recipes and the name of a food item, produce a list (in any
+    order) of all possible flat recipes for that category.
+
+    Returns an empty list if there are no possible recipes
+    """
+    atomic_costs = make_atomic_costs(recipes)
+    recipe_book = make_recipe_book(recipes)
+
+    if not has_valid(recipes, food_item, avoid_foods):
+        return []
+    if food_item in atomic_costs:
+        return [{food_item: 1}]
+    else:
+        recipe_path = recipe_book[food_item]
+        all_flats = []
+
+        for recipe in recipe_path:
+            valid = True
+            foods = []
+            rec_index = 0
+            while valid and rec_index < len(recipe):
+                food, num = recipe[rec_index]
+                sub_recipes = all_flat_recipes(recipes, food, avoid_foods)
+                valid = len(sub_recipes) > 0
+                foods.append([scale_recipe(rec, num) for rec in sub_recipes])
+                rec_index += 1
+            if valid:
+                all_flats.extend(ingredient_mixes(foods))
+
+        return all_flats
+
+
+if __name__ == "__main__":
+    # load example recipes from section 3 of the write-up
+    dairy_recipes = [
+        ("compound", "milk", [("cow", 2), ("milking stool", 1)]),
+        ("compound", "cheese", [("milk", 1), ("time", 1)]),
+        ("compound", "cheese", [("cutting-edge laboratory", 11)]),
+        ("atomic", "milking stool", 5),
+        ("atomic", "cutting-edge laboratory", 1000),
+        ("atomic", "time", 10000),
+    ]
+    cookie_recipes = [
+        ("compound", "cookie sandwich", [("cookie", 2), ("ice cream scoop", 3)]),
+        ("compound", "cookie", [("chocolate chips", 3)]),
+        ("compound", "cookie", [("sugar", 10)]),
+        ("atomic", "chocolate chips", 200),
+        ("atomic", "sugar", 5),
+        ("compound", "ice cream scoop", [("vanilla ice cream", 1)]),
+        ("compound", "ice cream scoop", [("chocolate ice cream", 1)]),
+        ("atomic", "vanilla ice cream", 20),
+        ("atomic", "chocolate ice cream", 30),
+    ]
+
+    with open("test_recipes/example_recipes.pickle", "rb") as f:
+        example_recipes = pickle.load(f)
+    x = make_recipe_book(example_recipes)
+    y = make_atomic_costs(example_recipes)
+    # print(y)
+    # print(lowest_cost(example_recipes, 'burger'))
+    # print(all_flat_recipes(example_recipes, "protein"))
+    # print(lowest_cost(example_recipes, 'cheese'))
+    # print(scale_recipe(soup,3))
+    # you are free to add additional testing code here!
+    cake_recipes = [{"cake": 1}, {"gluten free cake": 1}]
+    icing_recipes = [{"vanilla icing": 1}, {"cream cheese icing": 1}]
+    topping_recipes = [{"sprinkles": 20}]
+
+    print(ingredient_mixes([cake_recipes, icing_recipes, topping_recipes]))
