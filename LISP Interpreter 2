@@ -1,0 +1,584 @@
+"""
+6.1010 Spring '23 Lab 12: LISP Interpreter Part 2
+"""
+import sys
+sys.setrecursionlimit(20_000)
+
+
+class SchemeError(Exception):
+    """
+    A type of exception to be raised if there is an error with a Scheme
+    program.  Should never be raised directly; rather, subclasses should be
+    raised.
+    """
+
+    pass
+
+
+class SchemeSyntaxError(SchemeError):
+    """
+    Exception to be raised when trying to evaluate a malformed expression.
+    """
+
+    pass
+
+
+class SchemeNameError(SchemeError):
+    """
+    Exception to be raised when looking up a name that has not been defined.
+    """
+
+    pass
+
+
+class SchemeEvaluationError(SchemeError):
+    """
+    Exception to be raised if there is an error during evaluation other than a
+    SchemeNameError.
+    """
+
+    pass
+
+# Classes: #
+
+
+class EnvironmentFrame:
+    """
+    A class representing a frame in a Scheme interpreter.
+
+    A frame is a data structure that stores the bindings between variables and their
+    values in a specific context of a Scheme program. This class provides methods
+    to manage the variables in the frame, as well as to look up variables in
+    the parent frames.
+
+    Attributes:
+        variables (dict): A dictionary that maps variable names to their values.
+        parent (Frames or None): The parent frame of the current frame, or None
+        if this is the top-level frame.
+
+    Methods:
+        find(variable)
+            Looks up the value of a variable in the current frame and all its ancestors.
+            Args:
+                variable (str): The name of the variable to look up.
+            Returns:
+                The value of the variable, or None if the variable is not defined in any
+                of the frames.
+    """
+
+    def __init__(self, parent=None):
+        self.parent = parent
+        self.variables = {"#t": True, "#f": False, "nil": []}
+
+    def __getitem__(self, var):
+        if var in self.variables:
+            return self.variables[var]
+        if self.parent is not None:
+            return self.parent[var]
+        raise SchemeNameError
+
+    def __setitem__(self, var, val):
+        self.variables[var] = val
+
+    def __contains__(self, var):
+        if var in self.variables.keys():
+            return True
+        return False
+
+
+class UserFunctions:
+    """
+        Represents a user-defined function in Scheme.
+
+        Attributes:
+        - variables (list of str): the names of the parameters of the function
+        - expression (list): the body of the function as a Scheme expression
+        - frame (Frames): the frame in which the function was defined
+    """
+
+    def __init__(self, variables, expression, frame):
+        self.variables = variables
+        self.expression = expression
+        self.frame = frame
+
+    def __call__(self, variables):
+        if len(variables) == len(self.variables):
+            new_frame = EnvironmentFrame(self.frame)
+            for var in range(len(variables)):
+                new_frame[self.variables[var]] = variables[var]
+            return evaluate(self.expression, new_frame)
+        raise SchemeEvaluationError
+
+
+class Pair:
+    def __init__(self, car, cdr):
+        self.car = car
+        self.cdr = cdr
+
+
+def parse(tokens):
+    """
+    Parses a list of tokens, constructing a representation where:
+        * symbols are represented as Python strings
+        * numbers are represented as Python ints or floats
+        * S-expressions are represented as Python lists
+
+    Arguments:
+        tokens (list): a list of strings representing tokens
+    """
+
+    def parse_expression(index):
+        token = tokens[index]
+        if token == "(":
+            new = []
+            index += 1
+            try:
+                while tokens[index] != ")":
+                    component, index = parse_expression(index)
+                    new.append(component)
+            except:
+                raise SchemeSyntaxError
+            return new, index + 1
+        if token == ")":
+            raise SchemeSyntaxError
+        return number_or_symbol(token), index + 1
+
+    result = parse_expression(0)[0]
+
+    if parse_expression(0)[1] == len(tokens):
+        return result
+    raise SchemeSyntaxError
+
+
+def number_or_symbol(value):
+    """
+    Helper function: given a string, convert it to an integer or a float if
+    possible; otherwise, return the string itself
+
+    >>> number_or_symbol('8')
+    8
+    >>> number_or_symbol('-5.32')
+    -5.32
+    >>> number_or_symbol('1.2.3.4')
+    '1.2.3.4'
+    >>> number_or_symbol('x')
+    'x'
+    """
+    try:
+        return int(value)
+    except ValueError:
+        try:
+            return float(value)
+        except ValueError:
+            return value
+
+
+def tokenize(source):
+    """
+    Splits an input string into meaningful tokens (left parens, right parens,
+    other whitespace-separated values).  Returns a list of strings.
+
+    Arguments:
+        source (str): a string containing the source code of a Scheme
+                      expression
+    """
+    result = []
+
+    rows = source.split("\n")
+
+    for row in rows:
+        fragment = ""
+        for i, char in enumerate(row):
+            if char in ["(", ")", ";", " "]:
+                if len(fragment) != 0:
+                    result.append(fragment)
+                    fragment = ""
+                if char == "(":
+                    result.append("(")
+                if char == ")":
+                    result.append(")")
+                if char == ";":
+                    break
+            else:
+                fragment += char
+                if i == len(row) - 1:
+                    result.append(fragment)
+
+    return result
+
+
+# builtin function helpers #
+
+def equal(args):
+    for arg in args:
+        if arg != args[0]:
+            return False
+    return True
+
+
+def less(args):
+    left = args[0]
+    for arg in args[1:]:
+        if arg <= left:
+            return False
+        left = arg
+    return True
+
+
+def less_eq(args):
+    left = args[0]
+    for arg in args:
+        if arg < left:
+            return False
+        left = arg
+    return True
+
+
+def greater(args):
+    left = args[0]
+    for arg in args[1:]:
+        if arg >= left:
+            return False
+        left = arg
+    return True
+
+
+def greater_eq(args):
+    left = args[0]
+    for arg in args:
+        if arg > left:
+            return False
+        left = arg
+    return True
+
+
+def is_func(arg):
+    if len(arg) == 1:
+        return not arg[0]
+    raise SchemeEvaluationError
+
+
+def make_pair(arg):
+    if len(arg) == 2:
+        return Pair(arg[0], arg[1])
+    raise SchemeEvaluationError
+
+
+def get_car(arg):
+    if len(arg) != 1:
+        raise SchemeEvaluationError
+    if isinstance(arg[0], Pair):
+        return arg[0].car
+    raise SchemeEvaluationError
+
+
+def get_cdr(arg):
+    if len(arg) != 1:
+        raise SchemeEvaluationError
+    if isinstance(arg[0], Pair):
+        return arg[0].cdr
+    raise SchemeEvaluationError
+
+
+def make_list(arg):
+    if len(arg) == 0:
+        return []
+    elif len(arg) == 2:
+        return make_pair([arg[0], make_pair([arg[1], []])])
+    return make_pair([arg[0], make_list(arg[1:])])
+
+
+def islist(arg):
+    if len(arg) != 1:
+        return False
+    if arg[0] == []:
+        return True
+    if not isinstance(arg[0], Pair):
+        return False
+    return islist([arg[0].cdr])
+
+
+def list_length(arg):
+    if not islist(arg):
+        raise SchemeEvaluationError
+    length = 1
+    if arg[0] == []:
+        return 0
+    if isinstance(arg[0].cdr, Pair):
+        length += list_length([arg[0].cdr])
+    return length
+
+
+def list_ref(args):
+    lst, index = args
+    if islist([lst]):
+        if list_length([lst]) == 1:
+            if index == 0:
+                return lst.car
+            raise SchemeEvaluationError
+        elif list_length([lst]) == 0:
+            raise SchemeEvaluationError
+        if index == 0:
+            return lst.car
+        return list_ref([lst.cdr, index - 1])
+    if isinstance(lst, Pair) and index == 0:
+        return lst.car
+    raise SchemeEvaluationError
+
+
+def concat(args=[]):
+    for element in args:
+        if not islist([element]):
+            raise SchemeEvaluationError
+    if args == []:
+        return []
+    if len(args) == 1:
+        newlist = args[0]
+        return newlist
+
+    on = args[0]
+
+    if on == []:
+        new = concat(args[1:])
+    else:
+        new = make_pair([list_ref([on, list_length([on]) - 1]), concat(args[1:])])
+
+    for l in range(list_length([on]) - 1, 0, -1):
+        new = make_pair([list_ref([on, l - 1]), new])
+    return new
+
+
+def scheme_map(args):
+    func = args[0]
+    if list_length([args[1]]) == 0 or len(args) == 1:
+        return []
+    if list_length([args[1]]) == 1:
+        return make_pair([func([args[1].car]), []])
+    return make_pair([func([args[1].car]), scheme_map([func, args[1].cdr])])
+
+
+def scheme_filter(args):
+    func = args[0]
+    if len(args) == 1 or list_length([args[1]]) == 0:
+        return []
+    if list_length([args[1]]) == 1:
+        val = func([args[1].car])
+        if val:
+            return make_pair([args[1].car, []])
+        return []
+    boolean = func([args[1].car])
+    if boolean:
+        gen = make_pair([args[1].car, scheme_filter([func, args[1].cdr])])
+    else:
+        gen = scheme_filter([func, args[1].cdr])
+    return gen
+
+
+def scheme_reduce(args):
+    func = args[0]
+    lst = args[1]
+
+    if len(args) == 1 or list_length([lst]) == 0:
+        return args[2]
+    if list_length([lst]) == 1:
+        val = func([args[2], lst.car])
+        return val
+    val = func([args[2], lst.car])
+    return scheme_reduce([func, lst.cdr, val])
+
+
+def begin(args):
+    return args[-1]
+
+
+scheme_builtins = {
+    "+": sum,
+    "-": lambda args: -args[0] if len(args) == 1 else (args[0] - sum(args[1:])),
+    "*": lambda args: args[0] if len(args) == 1 else (args[0] * scheme_builtins['*'](args[1:])),
+    "/": lambda args: args[0] if len(args) == 1 else (args[0] / scheme_builtins['*'](args[1:])),
+    "equal?": equal,
+    ">": greater,
+    ">=": greater_eq,
+    "<": less,
+    "<=": less_eq,
+    "not": is_func,
+    "cons": make_pair,
+    "car": get_car,
+    "cdr": get_cdr,
+    "nil": [],
+    "list": make_list,
+    "list?": islist,
+    "length": list_length,
+    "list-ref": list_ref,
+    "append": concat,
+    "map": scheme_map,
+    "filter": scheme_filter,
+    "reduce": scheme_reduce,
+    "begin": begin,
+}
+
+
+builtin = EnvironmentFrame()
+for built, fun in scheme_builtins.items():
+    builtin[built] = fun
+
+
+def evaluate(tree, frame=None):
+    """
+    Evaluate the given syntax tree according to the rules of the Scheme
+    language.
+
+    Arguments:
+        tree (type varies): a fully parsed expression, as the output from the
+                            parse function
+    """
+
+    if frame is None:
+        frame = EnvironmentFrame(builtin)
+    if isinstance(tree, str):
+        return frame[tree]
+    if isinstance(tree, (int, float)):
+        return tree
+    if isinstance(tree, list):
+        if len(tree) == 0:
+            raise SchemeEvaluationError
+        if tree[0] == "define":
+            return process_define(tree, frame)
+        if tree[0] == "lambda":
+            return UserFunctions(tree[1], tree[2], frame)
+        if tree[0] == "if":
+            return process_if(tree, frame)
+        if tree[0] == "and":
+            return process_and(tree, frame)
+        if tree[0] == "or":
+            return process_or(tree, frame)
+        if tree[0] == "del":
+            try:
+                return frame.variables.pop(tree[1])
+            except:
+                raise SchemeNameError
+        if tree[0] == "let":
+            return process_let(tree, frame)
+        if tree[0] == "set!":
+            return process_set(tree, frame)
+
+    continued = []
+    for tr in tree[1:]:
+        continued.append(evaluate(tr, frame))
+
+    new_func = evaluate(tree[0], frame)
+    if not callable(new_func):
+        raise SchemeEvaluationError
+    return new_func(continued)
+
+
+def process_let(tree, frame):
+    new = EnvironmentFrame(frame)
+
+    for var in tree[1]:
+        new[var[0]] = evaluate(var[1], frame)
+
+    return evaluate(tree[2], new)
+
+
+def process_set(tree, frame):
+    new = evaluate(tree[2], frame)
+    new_frame = frame
+
+    while new_frame.parent is not None:
+        if tree[1] in new_frame:
+            new_frame[tree[1]] = new
+            return new
+        new_frame = new_frame.parent
+
+    if new_frame.parent is None:
+        raise SchemeNameError
+
+
+def process_and(tree, frame):
+    next = tree[1:]
+    for part in next:
+        if evaluate(part, frame) is False:
+            return False
+    return True
+
+
+def process_or(tree, frame):
+    next = tree[1:]
+    for part in next:
+        if evaluate(part, frame) is True:
+            return True
+    return False
+
+
+def process_if(tree, frame):
+    try:
+        eval = evaluate(tree[1], frame)
+        if eval:
+            return evaluate(tree[2], frame)
+        return evaluate(tree[3], frame)
+    except:
+        raise SchemeEvaluationError()
+
+
+def process_define(tree, frame):
+    if len(tree) != 3:
+        raise SchemeSyntaxError()
+    if isinstance(tree[1], str):
+        frame[tree[1]] = evaluate(tree[2], frame)
+        return frame[tree[1]]
+    if isinstance(tree[1], list):
+        new_tree = [tree[0], tree[1][0], ["lambda", tree[1][1:], tree[2]]]
+        return evaluate(new_tree, frame)
+    raise SchemeEvaluationError()
+
+
+def result_and_frame(tree, frame=None):
+    if frame is None:
+        frame = EnvironmentFrame(builtin)
+    return evaluate(tree, frame), frame
+
+
+def evaluate_file(file_name, frame=None):
+    if frame is None:
+        frame = EnvironmentFrame(builtin)
+    exp = open(file_name)
+    exp_str = exp.read()
+    expression = parse(tokenize(exp_str))
+
+    return evaluate(expression, frame)
+
+
+def repl(frame, verbose=False):
+    """
+    Read in a single line of user input, evaluate the expression, and print
+    out the result. Repeat until user inputs "QUIT"
+
+    Arguments:
+        verbose: optional argument, if True will display tokens and parsed
+            expression in addition to more detailed error output.
+    """
+    import traceback
+
+    while True:
+        input_str = input("in> ")
+        if input_str == "QUIT":
+            return
+        try:
+            token_list = tokenize(input_str)
+            if verbose:
+                print("tokens>", token_list)
+            expression = parse(token_list)
+            if verbose:
+                print("expression>", expression)
+            output, frame = result_and_frame(expression, frame)
+            # output = evaluate(expression)
+            print("  out>", output)
+        except SchemeError as e:
+            if verbose:
+                traceback.print_tb(e.__traceback__)
+            print("Error>", repr(e))
+
+
+if __name__ == "__main__":
+    lis = [1,2,3,4]
