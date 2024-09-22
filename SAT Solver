@@ -1,0 +1,214 @@
+"""
+6.1010 Spring '23 Lab 8: SAT Solver
+"""
+
+#!/usr/bin/env python3
+
+import sys
+import typing
+import doctest
+
+sys.setrecursionlimit(10_000)
+# NO ADDITIONAL IMPORTS
+
+
+def satisfying_assignment(formula):
+    """
+    Find a satisfying assignment for a given CNF formula.
+    Returns that assignment if one exists, or None otherwise.
+
+    >>> satisfying_assignment([])
+    {}
+    >>> x = satisfying_assignment([[('a', True), ('b', False), ('c', True)]])
+    >>> x.get('a', None) is True or x.get('b', None) is False or x.get('c', None) is True
+    True
+    >>> satisfying_assignment([[('a', True)], [('a', False)]])
+    """
+    if not formula:
+        return {}
+    if [] in formula:
+        return None
+
+    for f in formula:
+        for var, val in f:
+            next_formula, assigned = prepare_update(simplify_formula(formula, var, val))
+            satisfied = satisfying_assignment(next_formula)
+            if satisfied is not None:
+                return {**assigned, **satisfied, var: val}
+        return None
+
+
+def simplify_formula(formula, var, val):
+    """
+    Simplify a propositional logic formula with the given variable assignment.
+
+    Args:
+        formula (list): A list of lists of tuples representing a propositional
+        logic formula.
+        var (int): The variable to be assigned a truth value.
+        val (bool): The truth value to be assigned to the variable.
+
+    Returns:
+        list: A simplified propositional logic formula.
+    """
+    next_form = [
+        list(set(f) - {(var, not val)}) for f in formula if (var, not val) in f
+    ]
+    next_form += [f for f in formula if (var, not val) not in f and (var, val) not in f]
+    return next_form
+
+
+def prepare_update(formula):
+    """
+    Recursively simplify a propositional logic formula and return variable assignments.
+
+    Args:
+        formula (list): A list of lists of tuples representing a propositional logic
+        formula.
+
+    Returns:
+        tuple: A simplified propositional logic formula and a
+        dictionary of variable assignments.
+
+    """
+    if not formula:
+        return formula, {}
+
+    shortest_clause = min(formula, key=len)
+    if len(shortest_clause) == 1:
+        var, val = shortest_clause[0]
+        simplified_formula = simplify_formula(formula, var, val)
+        next_formula, assigned = prepare_update(simplified_formula)
+        assigned[var] = val
+        return next_formula, assigned
+    return formula, {}
+
+
+def get_form(row, col, n, val):
+    """
+    Return a list of clauses representing the constraints for a given cell and value.
+
+    Args:
+        row (int): The row index of the cell.
+        col (int): The column index of the cell.
+        n (int): The size of the sudoku board.
+        val (int): The value to be placed in the cell.
+
+    Returns:
+        list: A list of clauses representing the constraints for the cell and value.
+    """
+    formula = []
+    for value in range(1, n + 1):
+        if val == value:
+            formula.append([((row, col, val), True)])
+        else:
+            formula.append([((row, col, value), False)])
+    return formula
+
+
+def single(row, col, n):
+    """
+    Return a list of clauses representing the constraints for a given cell.
+
+    Args:
+        row (int): The row index of the cell.
+        col (int): The column index of the cell.
+        n (int): The size of the sudoku board.
+
+    Returns:
+        list: A list of clauses representing the constraints for the cell.
+    """
+    formula = []
+    for val in range(1, n):
+        for value in range(val + 1, n + 1):
+            formula.append([((row, col, val), False), ((row, col, value), False)])
+    formula.append([((row, col, value), True) for value in range(1, n + 1)])
+    return formula
+
+
+def sudoku_board_to_sat_formula(sudoku_board):
+    """
+    Generates a SAT formula that, when solved, represents a solution to the
+    given sudoku board.  The result should be a formula of the right form to be
+    passed to the satisfying_assignment function above.
+    """
+    n = len(sudoku_board)
+    sub_grid = int(n**0.5)
+    clauses = []
+
+    for row in range(n):
+        for col in range(n):
+            val = sudoku_board[row][col]
+            clauses += single(row, col, n) if val == 0 else get_form(row, col, n, val)
+
+    for row in range(n):
+        r_location = [(row, col) for col in range(n)]
+        clauses += next_vals(n, r_location)
+
+    for col in range(n):
+        c_location = [(row, col) for row in range(n)]
+        clauses += next_vals(n, c_location)
+
+    for main_row in range(sub_grid):
+        for main_col in range(sub_grid):
+            sub = []
+            for col in range(sub_grid):
+                for row in range(sub_grid):
+                    sub.append((sub_grid * main_row + row, sub_grid * main_col + col))
+            clauses += next_vals(n, sub)
+
+    return clauses
+
+
+def next_vals(n, coordinates):
+    """
+    Returns a list of lists representing the clauses in the CNF formula that encode the constraint that each value in
+    the range 1 to n must appear at most once in the given list of coordinates, which are assumed to be the positions
+    of cells in a Sudoku board.
+
+    Args:
+        n (int): the size of the Sudoku board, assumed to be a perfect square.
+        coordinates (List[Tuple[int, int]]): a list of tuples representing the row and column indices of cells in the
+            Sudoku board.
+
+    Returns:
+        List[List[Tuple[Tuple[int, int, int], bool]]]: a list of clauses, where each clause is represented as a list of
+        tuples of length 2, where the first tuple element is a triple representing a cell in the Sudoku board (row
+        index,
+        column index, and value), and the second tuple element is a boolean indicating whether the corresponding cell
+        is negated in the clause (False if not negated, True if negated).
+    """
+    output = []
+    for s in range(1, n + 1):
+        for i, coord1 in enumerate(coordinates):
+            for coord2 in coordinates[i + 1 :]:
+                one = (coord1[0], coord1[1], s)
+                two = (coord2[0], coord2[1], s)
+                output.append([(one, False), (two, False)])
+    return output
+
+
+def assignments_to_sudoku_board(assignments, n):
+    """
+    Given a variable assignment as given by satisfying_assignment, as well as a
+    size n, construct an n-by-n 2-d array (list-of-lists) representing the
+    solution given by the provided assignment of variables.
+
+    If the given assignments correspond to an unsolvable board, return None
+    instead.
+    """
+    if assignments is None:
+        return None
+
+    return [
+        [
+            next((val for val in range(1, n + 1) if assignments[(row, col, val)]), 0)
+            for col in range(n)
+        ]
+        for row in range(n)
+    ]
+
+
+if __name__ == "__main__":
+    _doctest_flags = doctest.NORMALIZE_WHITESPACE | doctest.ELLIPSIS
+    doctest.testmod(optionflags=_doctest_flags)
