@@ -1,0 +1,475 @@
+"""
+6.101 Spring '23 Lab 2: Image Processing 2
+"""
+
+# !/usr/bin/env python3
+
+# NO ADDITIONAL IMPORTS!
+# (except in the last part of the lab; see the lab writeup for details)
+import math
+from PIL import Image
+
+
+# VARIOUS FILTERS
+def get_pixel(image, row, col):
+    return image["pixels"][image["width"] * row + col]
+
+
+def set_pixel(image, row, col, color):
+    image["pixels"][image["width"] * row + col] = color
+
+
+def apply_per_pixel(image, func):
+    pix = image["pixels"].copy()
+    result = {
+        "height": image["height"],
+        "width": image["width"],
+        "pixels": pix,
+    }
+    for row in range(image["height"]):
+        for col in range(image["width"]):
+            color = get_pixel(image, row, col)
+            new_color = func(color)
+            set_pixel(result, row, col, new_color)
+
+    return result
+
+
+def inverted(image):
+    return apply_per_pixel(image, lambda color: 255 - color)
+
+
+# HELPER FUNCTIONS
+
+
+def correlate(image, kernel, boundary_behavior):
+    """
+    Compute the result of correlating the given image with the given kernel.
+    `boundary_behavior` will one of the strings "zero", "extend", or "wrap",
+    and this function will treat out-of-bounds pixels as having the value zero,
+    the value of the nearest edge, or the value wrapped around the other edge
+    of the image, respectively.
+
+    if boundary_behavior is not one of "zero", "extend", or "wrap", return
+    None.
+
+    Otherwise, the output of this function should have the same form as a 6.101
+    image (a dictionary with "height", "width", and "pixels" keys), but its
+    pixel values do not necessarily need to be in the range [0,255], nor do
+    they need to be integers (they should not be clipped or rounded at all).
+
+    This process should not mutate the input image; rather, it should create a
+    separate structure to represent the output.
+
+    DESCRIBE YOUR KERNEL REPRESENTATION HERE: 1-d array in row major form
+    """
+    if boundary_behavior not in ["zero", "extend", "wrap"]:
+        return None
+    height, width = image["height"], image["width"]
+    output = {"height": height, "width": width, "pixels": []}
+
+    kern = int(len(kernel) ** 0.5)
+    kernel = [[kernel[i * kern + j] for j in range(kern)] for i in range(kern)]
+    pixel = 0
+
+    for r in range(height):
+        for c in range(width):
+            tot = 0
+            for kernrow, row in enumerate(kernel):
+                for kerncol, val in enumerate(row):
+                    col_pixels = c + kerncol - len(kernel[0]) // 2
+                    row_pixels = r + kernrow - len(kernel) // 2
+
+                    if (
+                        col_pixels < 0
+                        or col_pixels >= width
+                        or row_pixels < 0
+                        or row_pixels >= height
+                    ):
+                        if boundary_behavior == "zero":
+                            pixel = 0
+                        elif boundary_behavior == "extend":
+                            if col_pixels < 0:
+                                col_pixels = 0
+                            elif col_pixels >= width:
+                                col_pixels = width - 1
+                            if row_pixels < 0:
+                                row_pixels = 0
+                            elif row_pixels >= height:
+                                row_pixels = height - 1
+                            pixel = image["pixels"][row_pixels * width + col_pixels]
+                        elif boundary_behavior == "wrap":
+                            col_pixels = (col_pixels + width) % width
+                            row_pixels = (row_pixels + height) % height
+                            pixel = image["pixels"][row_pixels * width + col_pixels]
+                    else:
+                        pixel = image["pixels"][row_pixels * width + col_pixels]
+
+                    tot += val * pixel
+            output["pixels"].append(tot)
+
+    return output
+
+
+def round_and_clip_image(image):
+    """
+    Given a dictionary, ensure that the values in the "pixels" list are all
+    integers in the range [0, 255].
+
+    All values should be converted to integers using Python's `round` function.
+
+    Any locations with values higher than 255 in the input should have value
+    255 in the output; and any locations with values lower than 0 in the input
+    should have value 0 in the output.
+    """
+    output = {"height": image["height"], "width": image["width"], "pixels": []}
+
+    for pixel in image["pixels"]:
+        rounded = round(pixel)
+        if rounded < 0:
+            clipped = 0
+        elif rounded > 255:
+            clipped = 255
+        else:
+            clipped = rounded
+        output["pixels"].append(clipped)
+
+    return output
+
+
+# FILTERS
+
+
+def blurred(image, kernel_size):
+    """
+    Return a new image representing the result of applying a box blur (with the
+    given kernel size) to the given input image.
+
+    This process should not mutate the input image; rather, it should create a
+    separate structure to represent the output.
+    """
+    kern = make_box_blur(kernel_size)
+    blur = correlate(image, kern, "extend")
+    return ensure_valid_image(round_and_clip_image(blur))
+
+
+def make_box_blur(n):
+    blur = [[1 / (n**2)] * n for ind in range(n)]
+    blur = blur[0] * n
+    return blur
+
+
+def sharpened(image, n):
+    blur = blurred(image, n)
+    sharp = {"height": image["height"], "width": image["width"], "pixels": []}
+    for r in range(image["height"]):
+        for c in range(image["width"]):
+            pixel = (
+                2 * image["pixels"][r * image["width"] + c]
+                - blur["pixels"][r * image["width"] + c]
+            )
+            sharp["pixels"].append(pixel)
+    return ensure_valid_image(round_and_clip_image(sharp))
+
+
+def edges(image):
+    """
+    Return an image that represents the results of the Sobel operator on the
+    inputted image; this emphasizes the edges of the image.
+
+    This function will not mutate the original image.
+    """
+    krow = [-1, -2, -1, 0, 0, 0, 1, 2, 1]
+    kcol = [-1, 0, 1, -2, 0, 2, -1, 0, 1]
+
+    o_r = correlate(image, krow, "extend")
+    o_c = correlate(image, kcol, "extend")
+
+    output = {"height": image["height"], "width": image["width"], "pixels": []}
+    for r in range(image["height"]):
+        for c in range(image["width"]):
+            pixel = math.sqrt((get_pixel(o_r, r, c)) ** 2 + (get_pixel(o_c, r, c)) ** 2)
+            output["pixels"].append(round(pixel))
+    return ensure_valid_image(round_and_clip_image(output))
+
+
+def ensure_valid_image(image):
+    width = image["width"]
+    height = image["height"]
+    pixels = image["pixels"]
+
+    if len(pixels) != width * height:
+        raise ValueError("Image size does not match width and height")
+
+    for pixel in pixels:
+        if not isinstance(pixel, int) or pixel < 0 or pixel > 255:
+            raise ValueError("Pixel values must be integers between 0 and 255")
+
+    return {"width": width, "height": height, "pixels": pixels}
+
+
+def color_filter_from_greyscale_filter(filt):
+    """
+    Given a filter that takes a greyscale image as input and produces a
+    greyscale image as output, returns a function that takes a color image as
+    input and produces the filtered color image.
+    """
+
+    def filter_color(image):
+        r = []
+        g = []
+        b = []
+        for i in image["pixels"]:
+            r.append(i[0])
+            g.append(i[1])
+            b.append(i[2])
+
+        r_filt = filt({"height": image["height"], "width": image["width"], "pixels": r})
+        g_filt = filt({"height": image["height"], "width": image["width"], "pixels": g})
+        b_filt = filt({"height": image["height"], "width": image["width"], "pixels": b})
+        colpix = []
+        for i in range(len(image["pixels"])):
+            colpix.append(
+                (r_filt["pixels"][i], g_filt["pixels"][i], b_filt["pixels"][i])
+            )
+        return {
+            "height": image["height"],
+            "width": image["width"],
+            "pixels": colpix,
+        }
+
+    return filter_color
+
+
+def make_blur_filter(kernel_size):
+    def blur_filter(image):
+        return blurred(image, kernel_size)
+
+    return blur_filter
+
+
+def make_sharpen_filter(kernel_size):
+    def sharpen_filter(image):
+        return sharpened(image, kernel_size)
+
+    return sharpen_filter
+
+
+def filter_cascade(filters):
+    """
+    Given a list of filters (implemented as functions on images), returns a new
+    single filter such that applying that filter to an image produces the same
+    output as applying each of the individual ones in turn.
+    """
+
+    def cascade(image):
+        for filt in filters:
+            image = filt(image)
+        return image
+
+    return cascade
+
+
+# SEAM CARVING
+
+# Main Seam Carving Implementation
+
+
+def seam_carving(image, ncols):
+    """
+    Starting from the given image, use the seam carving technique to remove
+    ncols (an integer) columns from the image. Returns a new image.
+    """
+    seamed = image.copy()
+    while ncols > 0:
+        grey = greyscale_image_from_color_image(seamed)
+        energy = compute_energy(grey)
+        energy_map = cumulative_energy_map(energy)
+        seam = minimum_energy_seam(energy_map)
+        seamed = image_without_seam(seamed, seam)
+        ncols -= 1
+
+    return seamed
+
+
+# Optional Helper Functions for Seam Carving
+
+
+def greyscale_image_from_color_image(image):
+    pix = image["pixels"]
+    greypix = [round(r * 0.299 + g * 0.587 + b * 0.114) for r, g, b in pix]
+    return {
+        "height": image["height"],
+        "width": image["width"],
+        "pixels": greypix,
+    }
+
+
+def compute_energy(grey):
+    return edges(grey)
+
+
+def cumulative_energy_map(energy_map):
+    width = energy_map["width"]
+    height = energy_map["height"]
+    cem = energy_map["pixels"][:width]
+
+    for entry in range(len(energy_map["pixels"])):
+        if entry >= width:
+            dist = entry - width
+            if entry % width == 0:
+                min_cumulative_energy = min(cem[dist], cem[dist + 1])
+            elif (entry + 1) % width == 0:
+                min_cumulative_energy = min(cem[dist], cem[dist - 1])
+            else:
+                min_cumulative_energy = min(cem[dist], cem[dist - 1], cem[dist + 1])
+            cem.append(min_cumulative_energy + energy_map["pixels"][entry])
+    return {"width": width, "height": height, "pixels": cem}
+
+
+def minimum_energy_seam(cem):
+    width = cem["width"]
+    height = cem["height"]
+    pixels = cem["pixels"]
+
+    bottom = pixels[(height - 1) * width :]
+    bot_i = bottom.index(min(bottom)) + (height - 1) * width
+    seam = [bot_i]
+    row_up = bot_i - width
+
+    while row_up >= 0:
+        if row_up % width == 0:
+            if pixels[row_up] <= pixels[row_up + 1]:
+                seam.append(row_up)
+            else:
+                seam.append(row_up + 1)
+        elif (row_up + 1) % width == 0:
+            if pixels[row_up] >= pixels[row_up - 1]:
+                seam.append(row_up - 1)
+            else:
+                seam.append(row_up)
+        else:
+            low = min(pixels[row_up], pixels[row_up + 1], pixels[row_up - 1])
+
+            if pixels[row_up - 1] == low:
+                seam.append(row_up - 1)
+            elif pixels[row_up] == low:
+                seam.append(row_up)
+            else:
+                seam.append(row_up + 1)
+
+        row_up = seam[-1] - width
+
+    return seam
+
+
+def image_without_seam(image, seam):
+    pixels = []
+    for i in range(len(image["pixels"])):
+        if i not in seam:
+            pixels.append(image["pixels"][i])
+
+    return {"height": image["height"], "width": image["width"] - 1, "pixels": pixels}
+
+
+def custom_feature(image):
+    r = []
+    g = []
+    b = []
+
+    for i in image["pixels"]:
+        r.append(i[0])
+        g.append(i[1])
+        b.append(i[2])
+
+    res = []
+
+    for i in range(len(image["pixels"])):
+        if i % 3 == 0:
+            res.append((r[i], 0, 0))
+        elif i % 3 == 1:
+            res.append((0, g[i], 0))
+        else:
+            res.append((0, 0, b[i]))
+    return {"height": image["height"], "width": image["width"], "pixels": res}
+
+
+# HELPER FUNCTIONS FOR LOADING AND SAVING COLOR IMAGES
+
+
+def load_color_image(filename):
+    """
+    Loads a color image from the given file and returns a dictionary
+    representing that image.
+
+    Invoked as, for example:
+       i = load_color_image('test_images/cat.png')
+    """
+    with open(filename, "rb") as img_handle:
+        img = Image.open(img_handle)
+        img = img.convert("RGB")  # in case we were given a greyscale image
+        img_data = img.getdata()
+        pixels = list(img_data)
+        width, height = img.size
+        return {"height": height, "width": width, "pixels": pixels}
+
+
+def save_color_image(image, filename, mode="PNG"):
+    """
+    Saves the given color image to disk or to a file-like object.  If filename
+    is given as a string, the file type will be inferred from the given name.
+    If filename is given as a file-like object, the file type will be
+    determined by the 'mode' parameter.
+    """
+    out = Image.new(mode="RGB", size=(image["width"], image["height"]))
+    out.putdata(image["pixels"])
+    if isinstance(filename, str):
+        out.save(filename)
+    else:
+        out.save(filename, mode)
+    out.close()
+
+
+def load_greyscale_image(filename):
+    """
+    Loads an image from the given file and returns an instance of this class
+    representing that image.  This also performs conversion to greyscale.
+
+    Invoked as, for example:
+       i = load_greyscale_image('test_images/cat.png')
+    """
+    with open(filename, "rb") as img_handle:
+        img = Image.open(img_handle)
+        img_data = img.getdata()
+        if img.mode.startswith("RGB"):
+            pixels = [
+                round(0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) for p in img_data
+            ]
+        elif img.mode == "LA":
+            pixels = [p[0] for p in img_data]
+        elif img.mode == "L":
+            pixels = list(img_data)
+        else:
+            raise ValueError(f"Unsupported image mode: {img.mode}")
+        width, height = img.size
+        return {"height": height, "width": width, "pixels": pixels}
+
+
+def save_greyscale_image(image, filename, mode="PNG"):
+    """
+    Saves the given image to disk or to a file-like object.  If filename is
+    given as a string, the file type will be inferred from the given name.  If
+    filename is given as a file-like object, the file type will be determined
+    by the 'mode' parameter.
+    """
+    out = Image.new(mode="L", size=(image["width"], image["height"]))
+    out.putdata(image["pixels"])
+    if isinstance(filename, str):
+        out.save(filename)
+    else:
+        out.save(filename, mode)
+    out.close()
+
+
+if __name__ == "__main__":
+    x = 1
