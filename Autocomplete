@@ -1,0 +1,242 @@
+"""
+6.1010 Spring '23 Lab 9: Autocomplete
+"""
+
+# NO ADDITIONAL IMPORTS!
+import doctest
+from text_tokenize import tokenize_sentences
+
+
+class PrefixTree:
+    def __init__(self):
+        self.value = None
+        self.children = {}
+
+    def _traverse(self, key):
+        """
+        Traverse the prefix tree based on the given key.
+        Raise a TypeError if the given key is not a string.
+        """
+        if not isinstance(key, str):
+            raise TypeError("Key must be a string")
+
+        current_node = self
+        for char in key:
+            if char not in current_node.children:
+                raise KeyError(f'Key "{key}" not found in prefix tree')
+            current_node = current_node.children[char]
+
+        return current_node
+
+    def __setitem__(self, key, value):
+        """
+        Add a key with the given value to the prefix tree,
+        or reassign the associated value if it is already present.
+        Raise a TypeError if the given key is not a string.
+        """
+        if not isinstance(key, str):
+            raise TypeError("Key must be a string")
+
+        current_node = self
+        for char in key:
+            if char not in current_node.children:
+                current_node.children[char] = PrefixTree()
+            current_node = current_node.children[char]
+
+        current_node.value = value
+
+    def __getitem__(self, key):
+        """
+        Return the value for the specified prefix.
+        Raise a KeyError if the given key is not in the prefix tree.
+        Raise a TypeError if the given key is not a string.
+        """
+        node = self._traverse(key)
+
+        if node.value is None:
+            raise KeyError(f'Key "{key}" not found in prefix tree')
+
+        return node.value
+
+    def __delitem__(self, key):
+        """
+        Delete the given key from the prefix tree if it exists.
+        Raise a KeyError if the given key is not in the prefix tree.
+        Raise a TypeError if the given key is not a string.
+        """
+        self.__setitem__(key, None)
+
+    def __contains__(self, key):
+        """
+        Is key a key in the prefix tree?  Return True or False.
+        Raise a TypeError if the given key is not a string.
+        """
+        try:
+            node = self._traverse(key)
+            return node.value is not None
+        except KeyError:
+            return False
+
+    def _get_node(self, key):
+        """
+        Return the node corresponding to the last character in the key,
+        or None if any of the characters in the key are not in the prefix tree.
+        """
+        if len(key) == 0:
+            return self
+        elif len(key) == 1:
+            if key in self.children:
+                return self.children[key]
+        else:
+            if key[0] in self.children:
+                return self.children[key[0]]._get_node(key[1:])
+
+    def __iter__(self, key=""):
+        """
+        Generator of (key, value) pairs for all keys/values in this prefix tree
+        and its children.  Must be a generator!
+        """
+
+        def generate_pairs(pt, prefix):
+            """
+            A recursive generator function that yields (key, value) pairs for each
+            key in the subtree rooted at node.
+            """
+            if pt.value is not None:
+                yield (prefix, pt.value)
+
+            for char, child_node in pt.children.items():
+                yield from generate_pairs(child_node, prefix + char)
+
+        node = self
+        for char in key:
+            if char not in node.children:
+                return
+            node = node.children[char]
+        return generate_pairs(node, key)
+
+
+def word_frequencies(text):
+    """
+    Given a piece of text as a single string, create a prefix tree whose keys
+    are the words in the text, and whose values are the number of times the
+    associated word appears in the text.
+    """
+    split = tokenize_sentences(text)
+    words = []
+    for sentence in split:
+        sentence = sentence.split()
+        words = words + sentence
+
+    start_node = PrefixTree()
+    for word in words:
+        if word not in start_node:
+            start_node[word] = 1
+        else:
+            value = start_node[word]
+            start_node[word] = value + 1
+    return start_node
+
+
+def autocomplete(tree, prefix, max_count=None):
+    """
+    Return the list of the most-frequently occurring elements that start with
+    the given prefix.  Include only the top max_count elements if max_count is
+    specified, otherwise return all.
+
+    Raise a TypeError if the given prefix is not a string.
+    """
+    if not isinstance(prefix, str):
+        raise TypeError("Prefix must be a string")
+
+    node = tree
+    for char in prefix:
+        if char not in node.children:
+            return []
+
+        node = node.children[char]
+
+    elems = sorted(tree.__iter__(prefix), key=lambda x: x[1], reverse=True)
+    if max_count is not None:
+        elems = elems[:max_count]
+
+    return [tup[0] for tup in elems]
+
+
+def autocorrect(tree, prefix, max_count=None):
+    """
+    Return the list of the most-frequent words that start with prefix or that
+    are valid words that differ from prefix by a small edit.  Include up to
+    max_count elements from the autocompletion.  If autocompletion produces
+    fewer than max_count elements, include the most-frequently-occurring valid
+    edits of the given word as well, up to max_count total elements.
+    """
+    autocompleted = autocomplete(tree, prefix, max_count)
+    if max_count is not None and len(autocompleted) >= max_count:
+        return autocompleted[:max_count]
+    changes = set()
+    for i in range(len(prefix)):
+        for char in range(97, 123):
+            delete = prefix[:i] + prefix[i + 1 :]
+            if delete in tree:
+                changes.add((delete, tree[delete]))
+
+            letter = chr(char)
+            change = prefix[:i] + letter + prefix[i + 1 :]
+            add = prefix[:i] + letter + prefix[i:]
+            if change in tree:
+                changes.add((change, tree[change]))
+            if add in tree:
+                changes.add((add, tree[add]))
+
+            if i < len(prefix) - 1:
+                exchange = prefix[:i] + prefix[i + 1] + prefix[i] + prefix[i + 2 :]
+                if exchange in tree:
+                    changes.add((exchange, tree[exchange]))
+    num_edits = max_count - len(autocompleted) if max_count else None
+    return list(
+        set(
+            autocompleted
+            + [
+                tup[0]
+                for tup in sorted(changes, key=lambda x: x[1], reverse=True)[:num_edits]
+            ]
+        )
+    )
+
+
+def word_filter(tree, pattern, subtree=""):
+    """
+    Return list of (word, freq) for all words in the given prefix tree that
+    match pattern.  pattern is a string, interpreted as explained below:
+         * matches any sequence of zero or more characters,
+         ? matches any single character,
+         otherwise char in pattern char must equal char in word.
+    """
+    filtered = []
+
+    if len(pattern) == 0:
+        if tree.value is not None:
+            filtered.append((subtree, tree.value))
+    elif pattern[0] == "*":
+
+        filtered += word_filter(tree, pattern[1:], subtree)
+        for child in tree.children:
+            filtered += word_filter(tree.children[child], pattern, subtree + child)
+    else:
+        for child in tree.children:
+            if pattern[0] == "?" or pattern[0] == child:
+                filtered += word_filter(
+                    tree.children[child], pattern[1:], subtree + child
+                )
+    return list(set(filtered))
+
+
+# you can include test cases of your own in the block below.
+if __name__ == "__main__":
+    doctest.testmod()
+    with open("dracula.txt", encoding="utf-8") as f:
+        text = f.read()
+
+    print(['hear', 'heart', 'hearth', 'hearthrug', 'hearts', 'heard', 'hearing', 'her', 'head', 'dear', 'near', 'ear'])
+
