@@ -1,0 +1,444 @@
+"""
+6.1010 Spring '23 Lab 10: Symbolic Algebra
+"""
+
+import doctest
+
+# NO ADDITIONAL IMPORTS ALLOWED!
+# You are welcome to modify the classes below, as well as to implement new
+# classes and helper functions as necessary.
+
+
+class Symbol:
+    precedence = 4
+    right_parens = False
+    left_parens = False
+
+    def __add__(self, second):
+        return Add(self, second)
+
+    def __sub__(self, second):
+        return Sub(self, second)
+
+    def __mul__(self, second):
+        return Mul(self, second)
+
+    def __truediv__(self, second):
+        return Div(self, second)
+
+    def __radd__(self, second):
+        return Add(self, second)
+
+    def __rsub__(self, second):
+        return Sub(second, self)
+
+    def __rmul__(self, second):
+        return Mul(self, second)
+
+    def __rtruediv__(self, second):
+        return Div(second, self)
+
+    def __rpow__(self, second):
+        return Pow(second, self)
+
+    def __pow__(self, second):
+        return Pow(self, second)
+
+    def simplify(self):
+        return self
+
+
+class Var(Symbol):
+    def __init__(self, name):
+        """
+        Initializer.  Store an instance variable called `name`, containing the
+        value passed in to the initializer.
+        """
+        self.name = name
+
+    def __str__(self):
+        return self.name
+
+    def __repr__(self):
+        return "Var(" + repr(self.name) + ")"
+
+    def deriv(self, var):
+        if var == self.name:
+            return Num(1)
+        return Num(0)
+
+    def eval(self, map):
+        if self.name in map.keys():
+            return map[self.name]
+        return self
+
+    def __eq__(self, other):
+        if isinstance(other, Var):
+            return self.name == other.name
+        return False
+
+
+class Num(Symbol):
+    def __init__(self, n):
+        """
+        Initializer.  Store an instance variable called `n`, containing the
+        value passed in to the initializer.
+        """
+        self.n = n
+
+    def __str__(self):
+        return str(self.n)
+
+    def __repr__(self):
+        return "Num(" + repr(self.n) + ")"
+
+    def deriv(self, var):
+        return Num(0)
+
+    def eval(self, map):
+        return self.n
+
+    def __eq__(self, other):
+        if isinstance(other, Num):
+            return self.n == other.n
+        return False
+
+
+class BinOp(Symbol):
+    def __init__(self, left, right):
+        """
+        Initializer.  Store two instance variables called 'left' and 'right', containing the
+        values passed in to the initializer.
+        """
+
+        self.left = left
+        self.right = right
+
+        if isinstance(self.left, (int, float)):
+            self.left = Num(left)
+        if isinstance(self.left, str):
+            self.left = Var(left)
+
+        if isinstance(self.right, (int, float)):
+            self.right = Num(right)
+        if isinstance(self.right, str):
+            self.right = Var(right)
+
+    def __repr__(self):
+        """
+        prints representation of Binary Operation
+        """
+        return (
+            self.__class__.__name__
+            + "("
+            + repr(self.left)
+            + ", "
+            + repr(self.right)
+            + ")"
+        )
+
+    def __str__(self):
+        """
+        This function returns the string representation of a Binary Operation
+        """
+        left = str(self.left)
+        right = str(self.right)
+
+        if self.right_parens is True:
+            if self.right.precedence <= self.precedence:
+                right = "(" + right + ")"
+        else:
+            if self.right.precedence < self.precedence:
+                right = "(" + right + ")"
+        if self.left_parens is True:
+            if self.left.precedence <= self.precedence:
+                left = "(" + left + ")"
+        else:
+            if self.left.precedence < self.precedence:
+                left = "(" + left + ")"
+        return left + " " + self.operand + " " + right
+
+    def eval(self, map):
+        if isinstance(self.left, Var) and self.left.name not in map:
+            raise NameError(f"Variable '{self.left.name}' is not defined")
+        if isinstance(self.right, Var) and self.right.name not in map:
+            raise NameError(f"Variable '{self.right.name}' is not defined")
+
+        if self.operand == "+":
+            return self.left.eval(map) + self.right.eval(map)
+        elif self.operand == "-":
+            return self.left.eval(map) - self.right.eval(map)
+        elif self.operand == "*":
+            return self.left.eval(map) * self.right.eval(map)
+        elif self.operand == "/":
+            return self.left.eval(map) / self.right.eval(map)
+        elif self.operand == "**":
+            return self.left.eval(map) ** self.right.eval(map)
+
+    def __eq__(self, other):
+        """
+        Check if two expressions are equal.
+        """
+
+        if not isinstance(other, BinOp):
+            return False
+        return (
+            self.operand == other.operand
+            and self.left == other.left
+            and self.right == other.right
+        )
+
+
+class Add(BinOp):
+    operand = "+"
+    precedence = 1
+
+    def deriv(self, var):
+        """
+        This function performs a derivative on a Binary Operation
+        """
+        return self.left.deriv(var) + self.right.deriv(var)
+
+    def simplify(self):
+        """
+        This function performs a derivative on a Binary Operation
+        """
+        left_simp = self.left.simplify()
+        right_simp = self.right.simplify()
+        if isinstance(left_simp, Num) and isinstance(right_simp, Num):
+            return Num(left_simp.n + right_simp.n)
+        # if adding zero to a number, simplify to that number
+        if isinstance(left_simp, Num):
+            if left_simp.n == 0:
+                return right_simp
+        if isinstance(right_simp, Num):
+            if right_simp.n == 0:
+                return left_simp
+        return Add(left_simp, right_simp)
+
+
+class Sub(BinOp):
+    operand = "-"
+    precedence = 1
+    right_parens = True
+
+    def deriv(self, var):
+        """
+        This function performs a derivative on a Binary Operation
+        """
+        return self.left.deriv(var) - self.right.deriv(var)
+
+    def simplify(self):
+        """
+        This function performs a derivative on a Binary Operation
+        """
+        left_simp = self.left.simplify()
+        right_simp = self.right.simplify()
+        if isinstance(left_simp, Num) and isinstance(right_simp, Num):
+            return Num(left_simp.n - right_simp.n)
+        # if subtracting a number by 0, simplify to that number
+        if isinstance(right_simp, Num):
+            if right_simp.n == 0:
+                return left_simp
+        return Sub(left_simp, right_simp)
+
+
+class Mul(BinOp):
+    operand = "*"
+    precedence = 2
+
+    def deriv(self, var):
+        """
+        This function performs a derivative on a Binary Operation
+        """
+        return self.left * self.right.deriv(var) + self.right * self.left.deriv(var)
+
+    def simplify(self):
+        """
+        This function performs a derivative on a Binary Operation
+        """
+        left_simp = self.left.simplify()
+        right_simp = self.right.simplify()
+        if isinstance(left_simp, Num) and isinstance(right_simp, Num):
+            return Num(left_simp.n * right_simp.n)
+        if isinstance(left_simp, Num):
+            if left_simp.n == 1:  # if multiplying number by 1, simplify to number
+                return right_simp
+            elif left_simp.n == 0:  # if multiplying a number by 0 simplify to zero
+                return Num(0)
+        if isinstance(
+            right_simp, Num
+        ):  # if multiplying number by 1, simplify to number
+            if right_simp.n == 1:
+                return left_simp
+            elif right_simp.n == 0:  # if multiplying a number by 0 simplify to zero
+                return Num(0)
+        return Mul(left_simp, right_simp)
+
+
+class Div(BinOp):
+    operand = "/"
+    precedence = 2
+    right_parens = True
+
+    def deriv(self, var):
+        """
+        This function performs a derivative on a Binary Operation
+        """
+        return (
+            self.right * self.left.deriv(var) - self.left * self.right.deriv(var)
+        ) / (self.right * self.right)
+
+    def simplify(self):
+        """
+        This function performs a derivative on a Binary Operation
+        """
+        left_simp = self.left.simplify()
+        right_simp = self.right.simplify()
+        if isinstance(left_simp, Num) and isinstance(right_simp, Num):
+            return Num(left_simp.n / right_simp.n)
+        if isinstance(left_simp, Num):  # if dividing a zero by a number, simplify to 1
+            if left_simp.n == 0:
+                return Num(0)
+        if isinstance(
+            right_simp, Num
+        ):  # if diving a number by 1, simplify to that number
+            if right_simp.n == 1:
+                return left_simp
+        return Div(left_simp, right_simp)
+
+
+class Pow(BinOp):
+    precedence = 3
+    operand = "**"
+    left_parens = True
+    right_parens = False
+
+    def deriv(self, var):
+        """
+        This function performs a derivative on a Binary Operation
+        """
+        if isinstance(self.right, Num):
+            return (self.left ** (self.right - Num(1)) * self.right) * self.left.deriv(
+                var
+            )
+        else:
+            raise TypeError(
+                "We cann only perform derivates on a value being raised by a number power"
+            )
+
+    def simplify(self):
+        """
+        This function simplifie
+        s a Binary Operation
+        """
+        left_simp = self.left.simplify()
+        right_simp = self.right.simplify()
+        if isinstance(right_simp, Num) and isinstance(left_simp, Num):
+            return Num(left_simp.n**right_simp.n)
+        if isinstance(right_simp, Num):
+            if right_simp.n == 0:
+                return Num(1)
+            elif right_simp.n == 1:
+                return left_simp
+        if isinstance(left_simp, Num):
+            if left_simp.n == 0:
+                return Num(0)
+        return Pow(left_simp, right_simp)
+
+
+def tokenize(input):
+    tokens = []
+    temp_token = ""
+    parentheses = "()"
+
+    # If there are no parentheses in the string, return the full string as a token
+    if "(" not in input:
+        tokens.append(input)
+        return tokens
+
+    # Tokenize the string by splitting on spaces and parentheses
+    for char in input:
+        if char == " ":
+            if temp_token:
+                tokens.append(temp_token)
+                temp_token = ""
+        elif char in parentheses:
+            if temp_token:
+                tokens.append(temp_token)
+                temp_token = ""
+            tokens.append(char)
+        else:
+            temp_token += char
+
+    # Append any remaining token
+    if temp_token:
+        tokens.append(temp_token)
+
+    return tokens
+
+
+def parse(tokens):
+    def parse_expression(index):
+        operators = ["+", "-", "*", "/", "**"]
+        valid_var_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+        # Check if current token is a number
+        try:
+            number = float(tokens[index])
+            return Num(number)
+
+        # Check if current token is a variable name
+        except:
+            if tokens[index] in valid_var_chars:
+                return Var(tokens[index])
+
+            # Current token is an opening parenthesis, parse subexpression
+            else:
+                # Find the operator to use for this subexpression
+                op_index = index + 1
+                open_count = 1
+                while open_count > 0:
+                    if tokens[op_index] == "(":
+                        open_count += 1
+                    elif tokens[op_index] == ")":
+                        open_count -= 1
+                    elif tokens[op_index] in operators and open_count == 1:
+                        break
+                    op_index += 1
+
+                # Parse left and right subexpressions
+                left_sub = tokens[index + 1 : op_index]
+                right_sub = tokens[op_index + 1 :]
+                left_parsed = parse(left_sub)
+                right_parsed = parse(right_sub)
+
+                # Return appropriate operation
+                if tokens[op_index] == "+":
+                    return Add(left_parsed, right_parsed)
+                elif tokens[op_index] == "-":
+                    return Sub(left_parsed, right_parsed)
+                elif tokens[op_index] == "*":
+                    return Mul(left_parsed, right_parsed)
+                elif tokens[op_index] == "**":
+                    return Pow(left_parsed, right_parsed)
+                else:
+                    return Div(left_parsed, right_parsed)
+
+        # Call the helper function with the first token
+
+    return parse_expression(0)
+
+
+def expression(token):
+    tokenized = tokenize(token)
+    return parse(tokenized)
+
+
+if __name__ == "__main__":
+    doctest.testmod()
+    x = Var("x")
+    y = Var("y")
+    z = 3 * x + x * y + y**2 - 18 / 6
+    print(repr(z))
+    print(z.deriv("x").simplify())
