@@ -1,0 +1,278 @@
+"""
+6.1010 Spring '23 Lab 1: Image Processing
+"""
+
+#!/usr/bin/env python3
+
+import math
+
+from PIL import Image
+
+# NO ADDITIONAL IMPORTS ALLOWED!
+
+
+def get_pixel(image, row, col):
+    print(row, col)
+    return image["pixels"][image["width"] * (row) + (col)]
+
+def set_pixel(image, row, col, color):
+    image["pixels"][image["width"] * (row) + (col)] = color
+
+
+def apply_per_pixel(image, func):
+    pix = image["pixels"].copy()
+    result = {
+        "height": image["height"],
+        "width": image["width"],
+        "pixels": pix,
+    }
+    for row in range(image["height"]):
+        print(row)
+        for col in range(image["width"]):
+            color = get_pixel(image, row, col)
+            new_color = func(color)
+            set_pixel(result, row, col, new_color)
+
+    return result
+
+
+def inverted(image):
+    return apply_per_pixel(image, lambda color: 255-color)
+
+
+# HELPER FUNCTIONS
+
+def correlate(image, kernel, boundary_behavior):
+    """
+    Compute the result of correlating the given image with the given kernel.
+    `boundary_behavior` will one of the strings "zero", "extend", or "wrap",
+    and this function will treat out-of-bounds pixels as having the value zero,
+    the value of the nearest edge, or the value wrapped around the other edge
+    of the image, respectively.
+
+    if boundary_behavior is not one of "zero", "extend", or "wrap", return
+    None.
+
+    Otherwise, the output of this function should have the same form as a 6.101
+    image (a dictionary with "height", "width", and "pixels" keys), but its
+    pixel values do not necessarily need to be in the range [0,255], nor do
+    they need to be integers (they should not be clipped or rounded at all).
+
+    This process should not mutate the input image; rather, it should create a
+    separate structure to represent the output.
+
+    DESCRIBE YOUR KERNEL REPRESENTATION HERE: 1-d array in row major form
+    """
+    if boundary_behavior not in ["zero", "extend", "wrap"]:
+        return None
+    height, width = image["height"], image["width"]
+    output = {"height": height, "width": width, "pixels": []}
+
+    kern = int(len(kernel)**0.5)
+    kernel = [[kernel[i * kern + j] for j in range(kern)] for i in range(kern)]
+
+    for r in range(height):
+        for c in range(width):
+            tot = 0
+            for kernrow, row in enumerate(kernel):
+                for kerncol, val in enumerate(row):
+                    col_pixels = c + kerncol - len(kernel[0]) // 2
+                    row_pixels = r + kernrow - len(kernel) // 2
+
+                    if col_pixels < 0 or col_pixels >= width or row_pixels < 0 or row_pixels >= height:
+                        if boundary_behavior == "zero":
+                            pixel = 0
+                        elif boundary_behavior == "extend":
+                            if col_pixels < 0:
+                                col_pixels = 0
+                            elif col_pixels >= width:
+                                col_pixels = width - 1
+                            if row_pixels < 0:
+                                row_pixels = 0
+                            elif row_pixels >= height:
+                                row_pixels = height - 1
+                            pixel = image["pixels"][row_pixels * width + col_pixels]
+                        elif boundary_behavior == "wrap":
+                            col_pixels = (col_pixels + width) % width
+                            row_pixels = (row_pixels + height) % height
+                            pixel = image["pixels"][row_pixels * width + col_pixels]
+                    else:
+                        pixel = image["pixels"][row_pixels * width + col_pixels]
+
+                    tot += val * pixel
+            output["pixels"].append(tot)
+
+    return output
+
+
+def round_and_clip_image(image):
+    """
+    Given a dictionary, ensure that the values in the "pixels" list are all
+    integers in the range [0, 255].
+
+    All values should be converted to integers using Python's `round` function.
+
+    Any locations with values higher than 255 in the input should have value
+    255 in the output; and any locations with values lower than 0 in the input
+    should have value 0 in the output.
+    """
+    output = {"height": image["height"], "width": image["width"], "pixels": []}
+
+    for pixel in image["pixels"]:
+        rounded = round(pixel)
+        if rounded < 0:
+            clipped = 0
+        elif rounded > 255:
+            clipped = 255
+        else:
+            clipped = rounded
+        output["pixels"].append(clipped)
+
+    return output
+
+
+# FILTERS
+
+def blurred(image, kernel_size):
+    """
+    Return a new image representing the result of applying a box blur (with the
+    given kernel size) to the given input image.
+
+    This process should not mutate the input image; rather, it should create a
+    separate structure to represent the output.
+    """
+
+    # first, create a representation for the appropriate n-by-n kernel (you may
+    # wish to define another helper function for this)
+    kern = make_box_blur(kernel_size)
+    # then compute the correlation of the input image with that kernel
+    blur = correlate(image, kern, "extend")
+    # and, finally, make sure that the output is a valid image (using the
+    # helper function from above) before returning it.
+
+    return ensure_valid_image(round_and_clip_image(blur))
+
+def make_box_blur(n):
+    blur = [[1/(n**2)]*n for ind in range(n)]
+    blur = blur[0]*n
+    return blur
+
+def sharpened(image, n):
+    blur = blurred(image, n)
+    sharp = {"height": image["height"], "width": image["width"], "pixels": []}
+    for r in range(image["height"]):
+        for c in range(image["width"]):
+            pixel = 2 * image["pixels"][r * image["width"] + c] - blur["pixels"][r * image["width"] + c]
+            sharp["pixels"].append(pixel)
+    return ensure_valid_image(round_and_clip_image(sharp))
+
+def edges(image):
+    """
+    Return an image that represents the results of the Sobel operator on the
+    inputted image; this emphasizes the edges of the image.
+
+    This function will not mutate the original image.
+    """
+    Krow = [-1, -2, -1, 0, 0, 0, 1, 2, 1]
+    Kcol = [-1, 0, 1, -2, 0, 2, -1, 0, 1]
+
+    Or = correlate(image, Krow, 'extend')
+    Oc = correlate(image, Kcol, 'extend')
+
+    output = {
+        'height': image['height'],
+        'width': image['width'],
+        'pixels': []
+    }
+    for r in range(image["height"]):
+        for c in range(image["width"]):
+            pixel = math.sqrt((get_pixel(Or,r,c))**2+(get_pixel(Oc,r,c))**2)
+            output["pixels"].append(round(pixel))
+    return ensure_valid_image(round_and_clip_image(output))
+
+def ensure_valid_image(image):
+    width = image["width"]
+    height = image["height"]
+    pixels = image["pixels"]
+
+    if len(pixels) != width * height:
+        raise ValueError("Image size does not match width and height")
+
+    for pixel in pixels:
+        if not isinstance(pixel, int) or pixel < 0 or pixel > 255:
+            raise ValueError("Pixel values must be integers between 0 and 255")
+
+    return {"width": width, "height": height, "pixels": pixels}
+
+
+# HELPER FUNCTIONS FOR LOADING AND SAVING IMAGES
+
+def load_greyscale_image(filename):
+    """
+    Loads an image from the given file and returns a dictionary
+    representing that image.  This also performs conversion to greyscale.
+
+    Invoked as, for example:
+       i = load_greyscale_image("test_images/cat.png")
+    """
+    with open(filename, "rb") as img_handle:
+        img = Image.open(img_handle)
+        img_data = img.getdata()
+        if img.mode.startswith("RGB"):
+            pixels = [round(.299 * p[0] + .587 * p[1] + .114 * p[2])
+                      for p in img_data]
+        elif img.mode == "LA":
+            pixels = [p[0] for p in img_data]
+        elif img.mode == "L":
+            pixels = list(img_data)
+        else:
+            raise ValueError(f"Unsupported image mode: {img.mode}")
+        width, height = img.size
+        return {"height": height, "width": width, "pixels": pixels}
+
+
+def save_greyscale_image(image, filename, mode="PNG"):
+    """
+    Saves the given image to disk or to a file-like object.  If filename is
+    given as a string, the file type will be inferred from the given name.  If
+    filename is given as a file-like object, the file type will be determined
+    by the "mode" parameter.
+    """
+    out = Image.new(mode="L", size=(image["width"], image["height"]))
+    out.putdata(image["pixels"])
+    if isinstance(filename, str):
+        out.save(filename)
+    else:
+        out.save(filename, mode)
+    out.close()
+
+
+if __name__ == "__main__":
+    # code in this block will only be run when you explicitly run your script,
+    # and not when the tests are being run.  this is a good place for
+    # generating images, etc.
+    cat = load_greyscale_image("test_images/bluegill.png")
+    (inverted(cat))
+    pass
+    #construct = load_greyscale_image("test_images/construct.png")
+
+    #save_greyscale_image(edges(construct), "constructedges.png")
+    #pyth = load_greyscale_image("test_images/python.png")
+    #save_greyscale_image(sharpened(pyth,11),"sharpython.png")
+    #cat = load_greyscale_image("test_images/cat.png")
+    #print(cat)
+    #print(blurred(cat,13))
+    #save_greyscale_image(blurred(cat,13),"catblur.png")
+    #pigbird = load_greyscale_image("test_images/pigbird.png")
+    #kern = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    #        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    #        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    #        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    #        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    #print(pigbird)
+    #print(correlate(pigbird, kern, "zero"))
+
+    #save_greyscale_image(correlate(pigbird, kern, "wrap"),"pb_wrap.png")
+    # bluegill = load_greyscale_image("test_images/bluegill.png")
+    # save_greyscale_image(inverted(bluegill),"invertedBlue.png")
+
